@@ -18,7 +18,6 @@ export default function Home() {
             src="/wedding.mp4"
             autoPlay
             loop
-            muted
             playsInline
             preload="auto"
             controls={false}
