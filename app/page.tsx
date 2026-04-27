@@ -11,23 +11,31 @@ export default function Home() {
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-[#F5F3F1]">
-      <div className="flex h-full w-full items-center justify-center">
-        <video
+      <div className="relative h-full w-full">
+        <div className="flex h-full w-full items-center justify-center">
+          <video
+            className="max-h-full max-w-full bg-[#F5F3F1] object-contain"
+            src="/wedding.mp4"
+            autoPlay
+            loop
+            muted
+            playsInline
+            preload="auto"
+            controls={false}
+            disablePictureInPicture
+            onLoadedData={onVideoReady}
+            onCanPlay={onVideoReady}
+            onPlaying={onVideoReady}
+          />
+        </div>
+        {/* Solid cream layer during decode/first frame so default black letterbox never shows */}
+        <div
           className={[
-            "max-h-full max-w-full object-contain",
-            "transition-[filter,opacity] duration-1200 ease-out will-change-[filter,opacity]",
-            isReady ? "opacity-100 blur-0" : "opacity-90 blur-2xl",
+            "pointer-events-none absolute inset-0 z-10 bg-[#F5F3F1]",
+            "transition-opacity duration-1000 ease-out",
+            isReady ? "opacity-0" : "opacity-100",
           ].join(" ")}
-          src="/wedding.mp4"
-          autoPlay
-          loop
-          muted
-          playsInline
-          preload="auto"
-          controls={false}
-          disablePictureInPicture
-          onLoadedData={onVideoReady}
-          onCanPlay={onVideoReady}
+          aria-hidden
         />
       </div>
     </div>
