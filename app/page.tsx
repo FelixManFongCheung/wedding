@@ -2,108 +2,63 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
-/** What we want in the ideal case. Safari often requires a one-time gesture to hear audio. */
-const videoConstraints = {
+const videoSettings = {
   autoplay: true,
   showControls: false,
-  /** Target end state; Safari may need an initial muted start + gesture to reach audible. */
-  preferAudible: true,
 } as const;
 
-type PlayPhase =
-  | "starting"
-  | "audible"
-  | "mutedAutoplay" /** playing without the native “press play” block */
-  | "needsTap";
+/** WebKit needs this in the first paint, not only from useLayoutEffect, or inline playback / autoplay can block. */
+const webkitPlaysinline = { "webkit-playsinline": "true" } as const;
 
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [phase, setPhase] = useState<PlayPhase>("starting");
+  /** Gated so loadeddata/canplay retries never re-mute after the user turns sound on. */
+  const userWantsAudioRef = useRef(false);
+  const [audioOn, setAudioOn] = useState(false);
+  const [soundMessage, setSoundMessage] = useState<string | null>(null);
 
-  /** WebKit / iOS: inline playback must be explicit or Safari can push fullscreen + play overlay. */
   useLayoutEffect(() => {
     const el = videoRef.current;
     if (!el) return;
     el.setAttribute("playsinline", "");
-    el.setAttribute("webkit-playsinline", "true");
     el.playsInline = true;
-  }, []);
-
-  const tryUnmute = useCallback((el: HTMLVideoElement) => {
-    el.muted = false;
-    return el.play() as Promise<void> | undefined;
-  }, []);
-
-  const tryStartMuted = useCallback((el: HTMLVideoElement) => {
+    el.defaultMuted = true;
     el.muted = true;
-    return el.play() as Promise<void> | undefined;
   }, []);
 
-  const beginAutoplay = useCallback(() => {
+  const tryMutedAutoplay = useCallback(() => {
     const el = videoRef.current;
     if (!el) return;
-
-    const p = tryUnmute(el);
-    if (p && typeof p.then === "function") {
-      void p
-        .then(() => setPhase("audible"))
-        .catch(() => {
-          // Apply muted in React before play() finishes so nothing resets `muted` mid-flight.
-          setPhase("mutedAutoplay");
-          el.muted = true;
-          const p2 = el.play() as Promise<void> | undefined;
-          if (p2 && typeof p2.then === "function") {
-            void p2.catch(() => setPhase("needsTap"));
-          } else {
-            setPhase("needsTap");
-          }
-        });
-    } else {
-      setPhase("needsTap");
+    if (!userWantsAudioRef.current) {
+      el.muted = true;
     }
-  }, [tryUnmute]);
+    return el.play();
+  }, []);
 
   useEffect(() => {
-    beginAutoplay();
-  }, [beginAutoplay]);
+    void tryMutedAutoplay()?.catch(() => {});
+  }, [tryMutedAutoplay]);
 
-  /** After quiet autoplay, first user gesture unmutes. Phase must switch before play() or React `muted` forces muted back on. */
-  useEffect(() => {
-    if (phase !== "mutedAutoplay") return;
-    const onFirstGesture = () => {
-      const el = videoRef.current;
-      if (!el || !videoConstraints.preferAudible) return;
-      setPhase("audible");
-      el.muted = false;
-      if (el.paused) {
-        void el.play().catch(() => setPhase("mutedAutoplay"));
-      }
-    };
-    window.addEventListener("pointerup", onFirstGesture, { capture: true, passive: true });
-    return () => window.removeEventListener("pointerup", onFirstGesture, { capture: true });
-  }, [phase]);
+  const runAfterDecode = useCallback(() => {
+    void tryMutedAutoplay()?.catch(() => {});
+  }, [tryMutedAutoplay]);
 
-  const onTapToPlay = useCallback(() => {
+  const enableSound = useCallback(() => {
+    setSoundMessage(null);
     const el = videoRef.current;
     if (!el) return;
-    const p = tryUnmute(el);
-    if (p && typeof p.then === "function") {
-      void p
-        .then(() => setPhase("audible"))
-        .catch(() => {
-          const p2 = tryStartMuted(el);
-          if (p2 && typeof p2.then === "function") {
-            void p2
-              .then(() => setPhase("mutedAutoplay"))
-              .catch(() => {});
-          }
-        });
-    } else {
-      void tryStartMuted(el);
-    }
-  }, [tryStartMuted, tryUnmute]);
-
-  const showTapOverlay = phase === "needsTap";
+    userWantsAudioRef.current = true;
+    el.muted = false;
+    setAudioOn(true);
+    void el.play().catch(() => {
+      el.muted = true;
+      userWantsAudioRef.current = false;
+      setAudioOn(false);
+      setSoundMessage(
+        "This browser may block sound until you allow audio for this site. Use the lock or site icon in the address bar, allow sound, then tap again."
+      );
+    });
+  }, []);
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-[#F5F3F1]">
@@ -112,22 +67,44 @@ export default function Home() {
           ref={videoRef}
           className="max-h-full max-w-full bg-[#F5F3F1] object-contain"
           src="/wedding.mp4"
-          autoPlay={videoConstraints.autoplay}
+          autoPlay={videoSettings.autoplay}
           loop
           playsInline
-          muted={phase === "mutedAutoplay"}
-          controls={videoConstraints.showControls}
+          {...webkitPlaysinline}
+          muted={!audioOn}
+          controls={videoSettings.showControls}
           preload="auto"
           disablePictureInPicture
+          onLoadedData={runAfterDecode}
+          onCanPlay={runAfterDecode}
         />
-        {showTapOverlay && (
-          <button
-            type="button"
-            onClick={onTapToPlay}
-            className="absolute inset-0 z-10 m-0 cursor-pointer border-0 bg-transparent p-0"
-            aria-label="Start video"
-          />
-        )}
+
+        <div className="absolute top-4 right-4 z-20 flex max-w-[min(20rem,calc(100%-2rem))] flex-col items-end gap-2">
+          {!audioOn ? (
+            <button
+              type="button"
+              onClick={enableSound}
+              className="rounded-full border border-zinc-300/80 bg-white/90 px-4 py-2.5 text-sm font-medium text-zinc-800 shadow-sm backdrop-blur-sm transition hover:bg-white"
+            >
+              Turn on sound
+            </button>
+          ) : (
+            <p
+              className="rounded-full border border-emerald-200/80 bg-white/90 px-4 py-2.5 text-sm font-medium text-emerald-900 shadow-sm backdrop-blur-sm"
+              role="status"
+            >
+              Sound on
+            </p>
+          )}
+          {soundMessage && (
+            <p
+              className="rounded-lg border border-amber-200/90 bg-amber-50/95 px-3 py-2 text-left text-xs leading-snug text-amber-950 shadow-sm"
+              role="alert"
+            >
+              {soundMessage}
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );
